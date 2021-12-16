@@ -1,5 +1,6 @@
 import numpy as np
 from scipy.special import binom as binomial
+from scipy.spatial import cKDTree
 
 __version__ = '0.1.0'
 
@@ -209,3 +210,70 @@ def map_to_cube(v, axes, intervals):
         retval.append((v[k]-ranges[k][0])/delta_k)
 
     return tuple(retval)
+
+
+def kdtree(axes, grid, index_non_nans=True):
+    """
+    Construct a k-D tree for nearest neighbor lookup.
+
+    k-dimensional trees are space-partitioning data structures for organizing
+    points in a k-dimensional parameter space. They are very efficient for
+    looking up nearest neighbors. This function takes a list of axes and the
+    grid spun by the axes and it constructs a corresponding k-D tree.
+
+    Grid is expected to be sparse, i.e.~not all vertices are expected to be
+    defined. Undefined vertices in `grid` are flagged with `np.nan`.
+
+    Parameters
+    ----------
+
+    * `axes` (tuple of arrays):
+        a list of axes that span the grid
+    * `grid` (ndarray):
+        an N-dimensional grid of function values
+    * `index_non_nans` (bool, optional, default=True)
+        should non-nan values be indexed and returned to the calling function.
+        If set to False, then only the kdtree is returned. If set to True,
+        then an array of indices of non-nan elements is also returned.
+
+    Returns
+    -------
+    * <scipy.spatial.cKDTree> instance if `index_non_nans`=False, or tuple
+        (<scipy.spatial.cKDTree>, non_nan_indices) if `index_non_nans`=True.
+    """
+
+    non_nan_indices = np.argwhere(~np.isnan(grid))
+    non_nan_vertices = np.array([[axes[i][non_nan_indices[k][i]] for i in range(len(axes))] for k in range(len(non_nan_indices))])
+    if index_non_nans:
+        return cKDTree(non_nan_vertices, copy_data=True), non_nan_indices
+    else:
+        return cKDTree(non_nan_vertices, copy_data=True)
+
+
+def impute_grid(axes, grid, weighting='none'):
+    """
+    Imputes missing values in the grid.
+
+    The function traverses the passed `grid` and finds all `nan`s. It then
+    interpolates the missing values along all directions, calculates a simple
+    mean and imputes the missing value in-place (i.e., it modifies the passed
+    grid).
+
+    Parameters
+    ----------
+    * `axes` (tuple of arrays): a list of axes
+    * `grid` (ndarray): N-D grid to be imputed
+    * `weighting` (string): weighting method. Only 'none' is currently
+      implemented, but other weighting schemes should be added.
+    """
+
+    if weighting != 'none':
+        raise NotImplementedError(f'weighting={weighting} is currently not supported.')
+
+    nantable = np.argwhere(np.isnan(grid[..., 0]))
+    for entry in nantable:
+        interps = interpolate_all_directions(entry=entry, axes=axes, grid=grid)
+        if np.all(np.isnan(interps)):
+            continue
+        interps = interps[~np.isnan(interps)].mean()
+        grid[tuple(entry)][0] = interps
