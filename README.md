@@ -4,7 +4,12 @@ Ndpolator is a module for multi-dimensional linear interpolation, extrapolation 
 
 ## General principles of interpolation
 
-Linear $N$-dimensional interpolation is a frequently used method for evaluating function values on a grid. The algorithm implemented in ndpolator is optimized for generality and speed. Given a sequence of axes (a 3D example is depicted below), interpolation successively reduces the number of dimensions in which it interpolates. It starts with the corners of the $N$-dimensional hypercube (solid circles) to obtain interpolated values (open squares) in the $(N-1)$-dimensional hyperplane while keeping the *last* axis constant ($z$-axis in the figure below). It then removes the last axis and forms an $(N-1)$-dimensional hypercube from the interpolated vertices. The process is then repeated until the dimension is reduced to 0 and the interpolated value in the point of interest is obtained (open circle).
+Linear $N$-dimensional interpolation is a frequently used method for evaluating function values on a grid. The algorithm implemented in ndpolator is 
+optimized for generality and speed. Given a sequence of axes (a 3D example is depicted below), interpolation successively reduces the number of 
+dimensions in which it interpolates. It starts with the corners of the $N$-dimensional hypercube (solid circles) to obtain interpolated values (open 
+squares) in the $(N-1)$-dimensional hyperplane while keeping the *last* axis constant ($z$-axis in the figure below). It then removes the last axis and 
+forms an $(N-1)$-dimensional hypercube from the interpolated vertices. The process is then repeated until the dimension is reduced to 0 and the 
+interpolated value in the point of interest is obtained (open circle).
 
 ![interpolation_3d.svg](docs/interpolation_3d.svg)
 
@@ -35,7 +40,7 @@ $$
 fv_j \mapsto fv_j + \frac{x_{N-i} - n_{j,N-i}}{n_{j+2^{N-i},N-i}-n_{j,N-i}} (fv_{j+2^{N-i}}-fv_{j}) \quad \textrm{for } i=1 \dots N.
 $$
 
-Once $i=0$, we are left with a single fv vertex, $\mathrm{fv}_0$, that holds the interpolated value. Note that array `fv` is modified in the process, so we need to pass a copy of the grid if original values are required for other purposes.
+Once $i=0$, we are left with a single $fv$ vertex, $fv_0$, that holds the interpolated value. Note that array $fv$ is modified in the process, so we need to pass a copy of the grid if original values are required for other purposes.
 
 As an example for setting up the ndpolator, consider a 2-D grid with the following coordinates and function values:
 
