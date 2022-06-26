@@ -1,8 +1,135 @@
 import numpy as np
 from scipy.special import binom as binomial
 from scipy.spatial import cKDTree
+from itertools import product
 
 __version__ = '0.1.0'
+
+
+class Ndpolator():
+    def __init__(self, axes, grid, impute=False):
+        self.axes = axes
+        self.grid = grid
+
+        if impute:
+            raise NotImplementedError('consider if this is worth implementing here.')
+        
+        self.indices = np.argwhere(~np.isnan(grid[...,0]))
+        non_nan_vertices = np.array([ [self.axes[i][self.indices[k][i]] for i in range(len(self.axes))] for k in range(len(self.indices))])
+        self.nntree = cKDTree(non_nan_vertices, copy_data=True)
+        ranges = (range(len(ax)-1) for ax in axes)
+        slices = [tuple([slice(elem, elem+2) for elem in x]) for x in product(*ranges)]
+        self.ics = np.array([s.start for slc in slices for s in slc if ~np.any(np.isnan(grid[slc]))], dtype=int).reshape(-1, len(axes))
+
+    def tabulate(self, arrs):
+        arrs = [np.atleast_1d(arr) for arr in arrs]
+        lens = np.array([len(arr) for arr in arrs], dtype=int)
+        if len(np.unique(lens)) == 1:
+            return np.vstack(arrs).T
+        max_length = lens.max()
+        for i, arr in enumerate(arrs):
+            if len(arr) == 1:
+                arrs[i] = np.full(max_length, arr[0])
+                continue
+            if len(arr) != max_length:
+                raise ValueError(f'cannot tabulate arrays of varying lengths {lens}.')
+        return np.vstack(arrs).T
+
+    def ndpolate(self, x, lo, hi, fv, copy_data=True):
+        N = len(lo)
+        powers = [2**k for k in range(N+1)]
+
+        n = np.empty((powers[N], N))
+
+        lfv = fv.copy() if copy_data else fv
+
+        for i in range(N):
+            for j in range(powers[N]):
+                n[j, i] = lo[i] + (int(j/powers[i]) % 2) * (hi[i]-lo[i])
+
+        for i in range(N):
+            for j in range(powers[N-i-1]):
+                lfv[j] += (x[N-i-1]-n[j, N-i-1])/(n[j+powers[N-i-1], N-i-1]-n[j, N-i-1])*(lfv[j+powers[N-i-1]]-lfv[j])
+
+        return lfv[0]
+        
+    def interp(self, req, raise_on_nans=True, return_nanmask=False, extrapolation_method='none'):
+        los = np.array([np.searchsorted(self.axes[k], req[:,k], 'left')-1 for k in range(req.shape[1])], dtype=int).T
+        his = los+2
+
+        vals = np.empty(shape=(req.shape[0], self.grid.shape[-1]))
+        for i, (v, ilo, ihi) in enumerate(zip(req, los, his)):
+            slc = tuple([slice(l, h) for l, h in zip(ilo, ihi)])
+            try:
+                subaxes = np.array([self.axes[k][slc[k]] for k in range(req.shape[1])])
+                subgrid = self.grid[slc]
+                lo, hi = subaxes[:,0], subaxes[:,1]
+                # print(f'subaxes={subaxes}, subgrid shape={subgrid.shape}, subgrid={subgrid}')
+            except:
+                vals[i] = np.nan
+                continue
+            pivot_indices = np.roll(np.arange(len(subaxes), -1, -1), -1)
+            fv = subgrid.transpose(*pivot_indices).reshape((2**req.shape[1], self.grid.shape[-1]))
+            # fv = subgrid.reshape((2**req.shape[1], self.grid.shape[-1]))
+            # print(f'fv.shape={fv.shape}\nfv={fv}')
+            vals[i] = self.ndpolate(v, lo, hi, fv)
+
+        nanmask = np.isnan(vals[:,0])
+        if ~np.any(nanmask):
+            return (vals, nanmask) if return_nanmask else vals
+
+        nan_indices = np.argwhere(nanmask).flatten()
+
+        # print(nanmask.shape)
+        # print(np.argwhere(nanmask))
+        # print(nan_indices.shape)
+        # print(f'nan_indices: {nan_indices}')
+
+        if extrapolation_method == 'none' and raise_on_nans:
+            raise ValueError(f'params out of bounds: {req[nan_indices]}')
+        elif extrapolation_method == 'nearest':
+            for k in nan_indices:
+                # print(f'req[{k}]={req[k]}')
+                d, i = self.nntree.query(req[k])
+                # print(f'd, i = {d}, {i}, self.indices[{i}]={self.indices[i]}')
+                vals[k] = self.grid[tuple(self.indices[i])]
+                # print(f'subgrid={self.grid[tuple(self.indices[i])]}')
+                # print(f'vals[{k}]={vals[k]}')
+        elif extrapolation_method == 'linear':
+            for k in nan_indices:
+                v = req[k]
+                ic = np.array([np.searchsorted(self.axes[i], v[i])-1 for i in range(len(self.axes))])
+                # print(f'v={v}, ic={ic}')
+
+                # get the inferior corners of all nearest fully defined hypercubes; this
+                # is all integer math so we can compare with == instead of np.isclose().
+                sep = (np.abs(self.ics-ic)).sum(axis=1)
+                corners = np.argwhere(sep == sep.min()).flatten()
+                # print(f'corners={corners}')
+
+                exvals = []
+                for corner in corners:
+                    slc = tuple([slice(self.ics[corner][i], self.ics[corner][i]+2) for i in range(len(self.ics[corner]))])
+                    coords = [self.axes[i][slc[i]] for i in range(len(self.axes))]
+
+                    # extrapolate:
+                    lo = [c[0] for c in coords]
+                    hi = [c[1] for c in coords]
+                    subgrid = self.grid[slc]
+                    pivot_indices = np.roll(np.arange(len(subaxes), -1, -1), -1)
+                    fv = subgrid.transpose(*pivot_indices).reshape((2**req.shape[1], self.grid.shape[-1]))
+                    # print(f'lo={lo}, hi={hi}')
+                    # print(f'subgrid={subgrid}')
+                    # print(f'fv={fv}')
+                    exval = self.ndpolate(v, lo, hi, fv)
+                    exvals.append(exval)
+                    # print(f'exval={exval}\nexvals={exvals}')
+                vals[k] = np.array(exvals).mean(axis=0)
+                # print(f'np.array(exvals)={np.array(exvals)}, mean={np.array(exvals).mean(axis=0)}')
+        else:
+            raise ValueError(r'extrapolation_method={extrapolation_method} is not supported.')
+
+        return (vals, nanmask) if return_nanmask else vals
 
 
 def tabulate(args):
@@ -61,10 +188,10 @@ def ndpolate(x, lo, hi, fv, copy_data=False):
     choice of axis sequence is not too important, but any local non-linearity
     will cause the sequence to matter.
 
-    The algorithm takes a vector (or an array of vectors) of interest `x`
-    (open circle), an N-dimensional vector of lower vertex axis values `lo`,
-    an N-dimensional vector of upper vertex axis values `hi`, and an array of
-    2^N function values `fv` sorted by vertices in the following sequence:
+    The algorithm takes a vector (or an array of vectors) of interest `x`, an
+    N-dimensional vector of lower vertex axis values `lo`, an N-dimensional
+    vector of upper vertex axis values `hi`, and an array of 2^N function
+    values `fv` sorted by vertices in the following sequence:
 
          | f(x1_lo, x2_lo, ..., xN_lo) |
          | f(x1_hi, x2_lo, ..., xN_lo) |
@@ -176,7 +303,7 @@ def interpolate_all_directions(entry, axes, grid):
     return np.array(interpolants)
 
 
-def map_to_cube(v, axes, intervals):
+def map_to_cube(v, axes, intervals, return_naxes=False):
     """
     Non-conformal mapping of the original space to an N-dimensional cube.
 
@@ -191,25 +318,32 @@ def map_to_cube(v, axes, intervals):
 
     Parameters
     ----------
-    * `v` (array):
-        vector in old coordinates
-    * `axes` (tuple of arrays):
-        a list of original axes
-    * `intervals` (tuple of 2-D arrays):
-        an array of step sizes at the beginning and the end of the new axes.
+    * `v` (2-D array): an array of vectors of interest in old coordinates
+    * `axes` (tuple of arrays): a list of axes in old coordinates
+    * `intervals` (tuple of 2-D arrays): an array of step sizes at the
+      beginning and the end of the new axes.
+    * `return_naxes` (bool, optional, default=False): whether a tuple of
+      normalized axes should be returned as well.
 
     Returns
     -------
-    * (array) vector in new coordinates
+    * (array) a transformed 2-D array in new coordinates, or
+    * (tuple) a transformed 2-D array in new coordinates and transformed axes,
+      if `return_naxes=True`.
     """
 
-    retval = []
-    for k in range(len(v)):
-        ranges = (axes[k][0], axes[k][-1])
-        delta_k = intervals[k][0] + (v[k]-ranges[k][0])/(ranges[k][1]-ranges[k][0])*(intervals[k][1]-intervals[k][0])
-        retval.append((v[k]-ranges[k][0])/delta_k)
+    nv = np.empty_like(v)
 
-    return tuple(retval)
+    for k in range(v.shape[1]):
+        ranges = (axes[k][0], axes[k][-1])
+        delta_k = intervals[k][0] + (v[:,k]-ranges[0])/(ranges[1]-ranges[0])*(intervals[k][1]-intervals[k][0])
+        nv[:,k] = (v[:,k]-ranges[0])/delta_k
+
+    if return_naxes:
+        naxes = [(axes[k]-axes[k][0]) / (intervals[k][0]+(axes[k]-axes[k][0])/(axes[k][-1]-axes[k][0])*(intervals[k][1]-intervals[k][0])) for k in range(len(axes))]
+        return (nv, tuple(naxes))
+
+    return nv
 
 
 def kdtree(axes, grid, index_non_nans=True):
@@ -278,3 +412,13 @@ def impute_grid(axes, grid, weighting='none'):
             continue
         interps = interps[~np.isnan(interps)].mean()
         grid[tuple(entry)][0] = interps
+
+
+def find_nearest_hypercubes(nv, naxes, ics):
+    ic = np.array([np.searchsorted(naxes[k], nv[:,k])-1 for k in range(len(naxes))]).T
+    # print(f'ic.shape={ic.shape}')  # (5, 3)
+    # print(f'ics.shape={ics.shape}')  # (2947, 3)
+    seps = (np.abs(ics[:,None,:]-ic)).sum(axis=2)  # (2947, 5, 3) -> (2947, 5)
+    corners = np.argwhere(seps == seps.min(axis=0)) # (N, 2)
+
+    return corners
