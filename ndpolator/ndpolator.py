@@ -60,8 +60,12 @@ class Ndpolator():
         vals = np.empty(shape=(req.shape[0], self.grid.shape[-1]))
         for i, (v, ilo, ihi) in enumerate(zip(req, los, his)):
             slc = tuple([slice(l, h) for l, h in zip(ilo, ihi)])
+            subaxes = [self.axes[k][slc[k]] for k in range(req.shape[1])]
+            if any(len(subaxis) != len(subaxes[0]) for subaxis in subaxes):
+                vals[i] = np.nan
+                continue
             try:
-                subaxes = np.array([self.axes[k][slc[k]] for k in range(req.shape[1])])
+                subaxes = np.array(subaxes)
                 subgrid = self.grid[slc]
                 lo, hi = subaxes[:,0], subaxes[:,1]
                 # print(f'subaxes={subaxes}, subgrid shape={subgrid.shape}, subgrid={subgrid}')
@@ -131,6 +135,69 @@ class Ndpolator():
 
         return (vals, nanmask) if return_nanmask else vals
 
+    def _blending_factor(self, d, blending_func='sigmoid', scale=15, offset=0.5):
+        rv = np.zeros_like(d)
+        if blending_func == 'linear':
+            rv[d <= 1] = 1-d[d <= 1]
+        elif blending_func == 'sigmoid':
+            rv[d <= 1] = 1-(1+np.exp(-scale*(d[d <= 1]-offset)))**-1
+        else:
+            print('function `%s` not supported.' % self.blending_func)
+            return None
+        rv[d < 0] = 1
+        return rv
+
+    def blend(self, req, fallback_ndp, extrapolation_method='linear', blending_func='sigmoid', blending_region=()):
+        # interpolate/extrapolate values using the default table:
+        default_table_values, nanmask = self.interp(req=req, raise_on_nans=False, return_nanmask=True, extrapolation_method=extrapolation_method)
+
+        # nanmask contains extrapolated values; get those values using the fallback table:
+        fallback_table_values = fallback_ndp.interp(req=req[:,0][nanmask].reshape(-1, 1), raise_on_nans=True, return_nanmask=False, extrapolation_method='nearest')
+
+        # initialize blended table values:
+        blended_table_values = default_table_values.copy()
+        blvals = []
+
+        nv, naxes = map_to_cube(req[nanmask], self.axes, blending_region, return_naxes=True)
+
+        for si, selem in enumerate(nv):
+            ic = [np.searchsorted(naxes[k], selem[k])-1 for k in range(len(naxes))]
+            seps = (np.abs(self.ics-np.array(ic))).sum(axis=1)
+            corners = np.argwhere(seps == seps.min()).flatten()
+
+            blvals_per_corner = []
+            for corner in corners:
+                slc = tuple([slice(self.ics[corner][i], self.ics[corner][i]+2) for i in range(len(self.ics[corner]))])
+                coords = [naxes[i][slc[i]] for i in range(len(naxes))]
+                verts = np.array(np.meshgrid(*coords)).T.reshape(-1, len(naxes))  # faster than itertools.product(*coords)
+                distance_vectors = selem-verts
+                distances = np.linalg.norm(distance_vectors, axis=1)
+                distance_vector = distance_vectors[distances.argmin()]
+
+                shift = ic-self.ics[corner]
+                shift = shift != 0
+
+                if shift.sum() == 0:
+                    raise ValueError('how did we get here?')
+
+                # project the vertex distance to the nearest hyperface/hyperedge:                    
+                distance_vector *= shift
+                distance = np.linalg.norm(distance_vector)
+                if distance > 1:
+                    blvals_per_corner.append(fallback_table_values[si])
+                    # print(f'{si=} {distance=} alpha=0 {blvals_per_corner=}')
+                    continue
+
+                alpha = self._blending_factor(distance, blending_func=blending_func)
+
+                blvals_per_corner.append((1-alpha)*fallback_table_values[si] + alpha*default_table_values[nanmask][si])
+                # print(f'distance={distance}, alpha={alpha}, fv={fallback_table_values[si]}, dv={default_table_values[nanmask][si]}, bl={blvals_per_corner[-1]}')
+
+            blvals.append(np.mean(blvals_per_corner))
+
+        blended_table_values[nanmask] = np.array(blvals).reshape(-1, 1)
+
+        return blended_table_values
 
 def tabulate(args):
     """
@@ -422,3 +489,43 @@ def find_nearest_hypercubes(nv, naxes, ics):
     corners = np.argwhere(seps == seps.min(axis=0)) # (N, 2)
 
     return corners
+
+
+def blending_factor(d, func='sigmoid', scale=15, offset=0.5):
+    """
+    Computes the amount of blending for coordinate `d`.
+
+    This auxiliary function returns a factor between 0 and 1 that is used for
+    blending a model atmosphere into blackbody atmosphere as the atmosphere
+    values fall off the grid. By default the function uses a sigmoid to
+    compute the factor, where a sigmoid is defined as:
+
+    f(d) = 1 - (1 + e^{-tau (d-Delta)})^{-1},
+
+    where tau is scaling and Delta is offset.
+
+    Arguments
+    ---------
+    * `d` (float or array): distance or distances from the grid
+    * `func` (string, optional, default='sigmoid'):
+        type of blending function; it can be 'linear' or 'sigmoid'
+    * `scale` (float, optional, default=15):
+        if `func`='sigmoid', `scale` is the scaling for the sigmoid
+    * `offset` (float, optional, default=0.5):
+        if `func`='sigmoid', `offset` is the zero-point between 0 and 1.
+
+    Returns
+    -------
+    * (float) blending factor between 0 and 1
+    """
+
+    rv = np.zeros_like(d)
+    if func == 'linear':
+        rv[d <= 1] = 1-d[d <= 1]
+    elif func == 'sigmoid':
+        rv[d <= 1] = 1-(1+np.exp(-scale*(d[d <= 1]-offset)))**-1
+    else:
+        print('function `%s` not supported.' % func)
+        return None
+    rv[d < 0] = 1
+    return rv
