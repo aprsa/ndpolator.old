@@ -184,9 +184,11 @@ Once we have the blending region and the blending function defined, we can proce
   * calculate the distance vector $\mathbf d$ between $\mathbf v$ and the nearest vertex of the hypercube;
   * project the distance vector onto the normal to the nearest grid surface and calculate $d = \mathbf d \cdot \mathbf {\hat n}$;
   * calculate:
+
     $$
     y_\mathrm{blend}(\mathbf v) = \begin{cases} y_\mathrm{def} (\mathbf v) & \textrm{ for } d<0; \\ \alpha y_\mathrm{def}(\mathbf v) + (1-\alpha) y_\mathrm{fb}(\mathbf v) & \textrm{ for } 0 \leq d \leq 1; \\ y_\mathrm{fb}(\mathbf v) & \textrm{ for } d > 1. \\ \end{cases}
     $$
+
     Here $\alpha(d)$ is the blending parameter defined above;
 * average $y_\mathrm{blend}(\mathbf v)$ from all hypercubes into the single value.
 
