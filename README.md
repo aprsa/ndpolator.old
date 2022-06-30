@@ -1,6 +1,6 @@
 # ndpolator
 
-Ndpolator is a module for multi-dimensional linear interpolation, extrapolation and imputation.
+Ndpolator is a module for multi-dimensional linear interpolation, extrapolation, imputation and blending.
 
 ## General principles of interpolation
 
@@ -85,23 +85,23 @@ We would then pass to ndpolator a point of interest `x`, say $(0.3, 0.8)$, `lo`,
 [2.4, 3.8, 2, 4]
 ```
 
-<!-- ## Imputation
+## General principles of imputation
 
-Imputation of missing values has a long history in data science and [many approaches have been proposed](https://towardsdatascience.com/6-different-ways-to-compensate-for-missing-values-data-imputation-with-examples-6022d9ca0779), either general or specific to the problem at hand. In our case we devised an imputation method that closely follows the overall assumptions in treating model atmosphere grids:
+Imputation of missing values has a long history in data science and [many approaches have been proposed](https://towardsdatascience.com/6-different-ways-to-compensate-for-missing-values-data-imputation-with-examples-6022d9ca0779), either general or specific to the problem at hand. In our case we devised an imputation method that relies on several assumptions:
 
 * the shape of the parameter space is locally linear to the extent that linear interpolation is adequate within the model uncertainties;
-* the definition range of atmosphere grids should not be extended past the original parameter spans; and
-* off-grid intensities should be smoothly "ramped" to (or blended with) a wider grid or a theoretical model, such as the blackbody atmosphere.
+* the definition range of grid should not be extended past the original axis spans; and
+* off-grid values should be smoothly "ramped" to (or blended with) an underlying fallback grid or a theoretical model.
 
+Consider an $N$-dimensional hypercube spun by a set of $N$ axes (a 3D example is depicted in the figure below). Let the central point be the imputation vertex (i.e., an undefined value that we want to impute). Other vertices can either either have associated values or be undefined themselves. In general, there are $3^N-1$ bounding vertices (so 26 in 3D).
 
-Consider an N-dimensional hypercube spun by the atmospheric parameters (a 3D example is depicted in the figure below). Let the central point be the imputation vertex (i.e., a NaN value). Other vertices can either either have associated values or NaNs. In general, there are $3^N-1$ bounding vertices (so 26 in 3D).
+![imputation_3d.svg](docs/imputation_3d.svg)
 
-![imputation_3d.svg](imputation_3d.svg)
+If all bounding vertex values are defined, then there are $N \choose D$ combinations to interpolate in $D$-dimensional subspace. In 3D, there is 1 combination in 3D, 3 combinations in 2D, and 3 combinations in 1D (cf. the figure above). If there are any undefined values in the grid, combinations that rely on those values cannot be used for imputation.
 
-If all bounding vertex values are defined, there are $N \choose D$ combinations to interpolate in $D$-dimensional subspace. In 3D, there is 1 combination in 3D, 3 combinations in 2D, and 3 combinations in 1D (cf. the figure above). If there are any NaN values in the grid, those values will fail to interpolate.
+If the grid were truly linear, then it would not matter along which direction we interpolate -- all directions would yield the same answer. If, however, the parameter space is non-linear, then each interpolated direction will yield a different result. The imputed value can only be a single estimate, of course; in principle we would need to evaluate a local curvature but that would violate our linearity assumption. Because of that, we join individual values either by taking a simple mean, or by first averaging them per dimension of the subspace (i.e., over $N \choose D$ combinations), and then evaluating the mean. When imputing, ndpolator implements a function that returns an array of all interpolants, so the calling function can apply any weighting scheme that is suitable for the problem at hand.
 
-If the grid were truly linear, then it would not matter along which direction we interpolate -- all directions would yield the same answer. In our case, however, the parameter space is notably non-linear, so each interpolated direction yields a different result. We need to impute the missing value with a single estimate; statistically we would need to evaluate the local curvature but that would violate our linearity assumption above. Because of that, we can join individual values either by taking a simple mean, or by first averaging them per dimension of the subspace (i.e., over $N \choose D$ combinations), and then taking the mean. The function returns an array of all interpolants, so the calling function can apply any weighting scheme that is suitable for the problem at hand.
-
+<!-- 
 The order of directions is determined by the `mask` parameter. It flags the axes that are "in use". For example, for a 3D grid, the sequence is:
 
 $$ [1, 1, 1], [0, 1, 1], [1, 0, 1], [1, 1, 0], [0, 0, 1], [0, 1, 0], [1, 0, 0]. $$
@@ -109,12 +109,13 @@ $$ [1, 1, 1], [0, 1, 1], [1, 0, 1], [1, 1, 0], [0, 0, 1], [0, 1, 0], [1, 0, 0]. 
 ### Application to model atmospheres
 
 Atmosphere grids provide emergent specific intensity of light as a function of atmospheric parameters (Teff, logg, heavy metal abundance, micro- and macro-turbulence, rotational and revolutional radial velocity, ...). These are computed by the model atmosphere codes in (usually) regularly spaced grids of parameters. While some combinations of parameters are not physical, there can be combinations of parameters that *are* physical but that model atmospheres fail to converge. As computing atmospheric models is outside of PHOEBE's realm, we rely on other works to provide the atmosphere grids for us. When these grids feature combinations of parameters that are physical but that do not come with a corresponding emergent specific intensity, we need to *impute* them: replace the non-existent values with their *estimates* from values that are available.
+-->
 
-### Blending
+## General principles of blending
 
-The two well defined regimes for computing emergent passband intensities are (1) when the atmospheric parameters fall within the model atmosphere grid, and (2) when the atmospheric parameters fall well outside the model atmosphere grid. In the first case we linearly interpolate (in $N$ dimensions) on the grid, and in the second case we assume a blackbody model atmosphere.
+The two well defined regimes for linearly interpolating values on an n-D grid are (1) when the points of interest fall within the grid, and (2) when the points of interest fall well outside the grid. In the first case we linearly interpolate (in $N$ dimensions) on the grid, and in the second case we fall back on the underlying grid or a theoretical model.
 
-In the latter case we have to deal with one additional complication: limb darkening. Blackbody radiation, by virtue of emergent angle invariance, is not limb-darkened, while stars of course are. That is why the normal emergent passband intensity at a given temperature $T_\mathrm{eff}$ has to be corrected by the integrated limb darkening:
+<!-- In the latter case we have to deal with one additional complication: limb darkening. Blackbody radiation, by virtue of emergent angle invariance, is not limb-darkened, while stars of course are. That is why the normal emergent passband intensity at a given temperature $T_\mathrm{eff}$ has to be corrected by the integrated limb darkening:
 
 $$ \mathcal L_\mathrm{int} = \int_0^1 \mathcal L(\mu) d\mu, $$
 
@@ -122,30 +123,29 @@ where $\mathcal L(\mu)$ is the limb darkening function and $\mu \equiv \cos \the
 
 $$ B_\mathrm{norm}(\lambda) \mapsto \frac{B_\mathrm{norm}(\lambda)}{\mathcal{L}_\mathrm{int}}. $$
 
-The problem lies in the dependence of $\mathcal L_\mathrm{int}$ on temperature by way of limb darkening coefficients for the given $\mathcal L(\mu)$. When atmospheric parameters are on-grid, $\mathcal L_\mathrm{int}$ is easy to interpolate, but when they are off-grid, $\mathcal L_\mathrm{int}$ needs to be extrapolated. In the vicinity of the grid an $N$-D extrapolation is likely acceptable, but farther from the grid the extrapolated value becomes increasingly unreliable and we are likely better off adopting the _nearest_ value of $\mathcal L_\mathrm{int}$ on the grid instead.
+The problem lies in the dependence of $\mathcal L_\mathrm{int}$ on temperature by way of limb darkening coefficients for the given $\mathcal L(\mu)$. When atmospheric parameters are on-grid, $\mathcal L_\mathrm{int}$ is easy to interpolate, but when they are off-grid, $\mathcal L_\mathrm{int}$ needs to be extrapolated. In the vicinity of the grid an $N$-D extrapolation is likely acceptable, but farther from the grid the extrapolated value becomes increasingly unreliable and we are likely better off adopting the _nearest_ value of $\mathcal L_\mathrm{int}$ on the grid instead. -->
 
-When the values of atmospheric parameters are off the grid but _close_, neither of the above regimes is applicable. If we assumed blackbody radiation, we would introduce a discontinuous jump in emergent passband intensity every time we wander off the grid, which is of course not desired. Instead, this region should "blend" the model atmosphere grid into the blackbody regime as smoothly as possible. Achieving that is our next goal.
+When the points of interest are off the grid but _close_, neither of the above regimes is applicable. If we assumed the underlying grid value, we would introduce a discontinuous jump in grid values every time we wander off the grid, which is of course not desired. Instead, this region should "blend" the default grid with the underlying grid as smoothly as possible.
 
-It is worth noting that, while blending provides a smooth transition between model atmospheres and blackbody approximation, it does little to nothing to aid in the proper description of physical circumstances that govern this off-grid regime. It is certainly better than a discrete jump, the ultimate solution will be to retire the blackbody approximation and replace it with a more physical model such as the gray atmosphere. Blending will then also be more physical, at least in the sense that the underlying model is not so fundamentally discrepant.
+It is worth noting that, while blending provides a smooth transition between the grids, it does _not_ provide any insight into the behavior off-grid. While it is certainly better than a discrete jump, expanding the default grid is the only valid way to extend the applicability of n-D interpolation.
 
 ### Blending region
 
-Model atmosphere axes in general follow physical units, so it is impractical to define the blending region in relative terms; for example, 1% in temperature might relate to 500K while 1% in $\log g$ would be 0.05 dex. To rectify that, we remap the axes so that the blending region can be controlled by a single parameter (i.e., the extent beyond the grid boundary). Given the blending region (for example 750K in temperature, 0.5 in surface gravity and 0.5 in abundances), the axes will be rescaled so that the blending region corresponds to 1 unit along each axis. The offsets in the function below are the values of the first element in each axis.
+Grid axes will in general correspond to some physical quantity having some given physical units, so it is impractical to define the blending region in relative terms; for example, 1% in one parameter and 1% in another can be vastly disproportionate. To handle that, we remap the axes using `ndpolator.map_to_cube()` so that the blending region can be controlled by a single parameter (i.e., the extent beyond the grid boundary). Given the blending region, the axes will be (possibly non-linearly) rescaled so that the blending region corresponds to 1 unit along each axis.
 
 ### The blending function
 
 The smoothness of the on-grid to off-grid transition will depend on several factors:
 
-* similarity of the model atmosphere intensities and blackbody intensities at the edge;
-* reliability of the $\mathcal L_\mathrm{int}$ extrapolation (be it actual extrapolation or nearest neighbor value adoption);
-* reliability of the model atmosphere intensity extrapolation; and
-* the choice of the blending function and its extent (i.e., how fast will extrapolated model atmosphere values be tapered into the blackbody regime).
+* similarity of the default and fallback grid values at the edge;
+* reliability of extrapolating default grid values; and
+* the choice of the blending function and its extent (i.e., how fast will the extrapolated grid values be blended with the fallback values).
 
-The first three factors are largely out of our control; the last factor, on the other hand, is. The principal parameter that determines blending is _distance from the grid_; given a vector of interest $\mathbf v$ and distance $d$, the blending function provides a prescription on how to mix the extrapolated grid intensity and blackbody intensity at point $\mathbf v$:
+The first two factors are largely out of our control; the last factor, on the other hand, is. The principal parameter that determines blending is _distance from the grid_; given a point of interest $\mathbf v$ and distance $d$, the blending function provides a prescription on how to mix the extrapolated grid value and fallback grid value at point $\mathbf v$:
 
-$$ I_\mathrm{blend} (\mathbf v) = \alpha(d) \, I_\mathrm{atm} (\mathbf v) + [1 - \alpha(d)] \, I_\mathrm{bb} (\mathrm{v}), $$
+$$ y_\mathrm{blend} (\mathbf v) = \alpha(d) \, y_\mathrm{def} (\mathbf v) + [1 - \alpha(d)] \, I_\mathrm{fb} (\mathrm{v}), $$
 
-where $\alpha(d)$ is the mixing parameter. The simplest prescription for $\alpha(d)$ might be a simple linear ramp:
+where $\alpha(d)$ is the blending parameter. The simplest prescription for $\alpha(d)$ might be a simple linear ramp:
 
 $$ \alpha (d) = 1 - \tau d, $$
 
@@ -155,9 +155,7 @@ $$ \alpha (d) = 1 - \left( 1 + e^{-\tau (d-\delta)} \right)^{-1}, $$
 
 where $\tau$ and $\delta$ control sigmoid steepness and offset, respectively.
 
-It is important to note that there is _nothing fundamenally physical_ about the choice of the blending function: we _know_ that blackbody intensities are a poor approximation for stars, and we _know_ that model atmosphere validity deteriorates towards the edge of the definition range; how we blend the two values that we _know_ are wrong is of little practical consequence, for as long as the transition is smooth and the model does not feature a significant number of blended surface elements. Blending is meant only and exclusively to enable us to use model atmospheres for the majority of the star when a handful of surface elements' atmospheric parameters fall off the grid, such as the nose of a semi-detached binary, or a spike in reflection, or close-to-critically spinning stars.
-
-Below we define a blending function with these two choices (linear and sigmoid).
+<!-- It is important to note that there is _nothing fundamenally physical_ about the choice of the blending function: we _know_ that blackbody intensities are a poor approximation for stars, and we _know_ that model atmosphere validity deteriorates towards the edge of the definition range; how we blend the two values that we _know_ are wrong is of little practical consequence, for as long as the transition is smooth and the model does not feature a significant number of blended surface elements. Blending is meant only and exclusively to enable us to use model atmospheres for the majority of the star when a handful of surface elements' atmospheric parameters fall off the grid, such as the nose of a semi-detached binary, or a spike in reflection, or close-to-critically spinning stars. -->
 
 ### Extrapolate from the grid or adopt the value from the nearest neighbor?
 
@@ -165,33 +163,31 @@ As mentioned above, extrapolation becomes progressively more inaccurate as the d
 
 To that end we employ [k-D trees](https://en.wikipedia.org/wiki/K-d_tree). The algorithm is implemented in scipy; it partitions the data in a way that allows a binary search for the nearest neighbor. To create the search tree, we first identify all non-null vertices and then initialize the tree.
 
-### Computing the blended intensity
+### Computing the blended values
 
-Blended emergent intensity can in general be written as:
+Blended values can in general be written as:
 
-$$ I_\mathrm{blend} (\mathbf v) = 
+$$ y_\mathrm{blend} (\mathbf v) = 
 \begin{cases}
-I_\mathrm{atm} (\mathbf v) & \textrm{model atmosphere region} \\
-\alpha I_\mathrm{atm} (\mathbf v) + (1-\alpha) I_\mathrm{bb} (\mathbf v) & \textrm{blending region} \\
-I_\mathrm{bb} (\mathbf v) & \textrm{blackbody region} \\
+y_\mathrm{def} (\mathbf v) & \textrm{default grid region} \\
+\alpha y_\mathrm{def} (\mathbf v) + (1-\alpha) y_\mathrm{fb} (\mathbf v) & \textrm{blending region} \\
+y_\mathrm{fb} (\mathbf v) & \textrm{fallback region} \\
 \end{cases} $$
 
 Once we have the blending region and the blending function defined, we can proceed with blending itself. The overall sequence of steps for blending is:
 
-* remap the vector of interest, $\mathbf v$, to the uniform axes;
+* remap the point of interest, $\mathbf v$, to uniform axes;
 * among all hypercubes on the grid, find those that are fully defined (i.e., all corresponding intensities are defined and finite) and adjacent to $\mathbf v$;
 * for each hypercube:
-  * extrapolate the value of $\mathcal L_\mathrm{int}$;
-  * calculate blackbody intensity as $I_\mathrm{bb}(\mathrm v) = B(T_\mathrm{eff})/\mathcal L_\mathrm{int}$;
-  * extrapolate the value of $I_\mathrm{atm} (\mathbf v)$;
-  * calculate the distance vector $\mathbf d$ from $\mathbf v$ to the nearest vertex of the hypercube;
+  * interpolate/calculate fallback grid value;
+  * extrapolate the value of $y_\mathrm{def} (\mathbf v)$ from the default grid;
+  * calculate the distance vector $\mathbf d$ between $\mathbf v$ and the nearest vertex of the hypercube;
   * project the distance vector onto the normal to the nearest grid surface and calculate $d = \mathbf d \cdot \mathbf {\hat n}$;
   * calculate:
     $$
-    I_\mathrm{blend}(\mathbf v) = \begin{cases} I_\mathrm{atm} (\mathbf v) & \textrm{ for } d<0; \\ \alpha I_\mathrm{atm}(\mathbf v) + (1-\alpha) I_\mathrm{bb}(\mathbf v) & \textrm{ for } 0 \leq d \leq 1; \\ I_\mathrm{bb}(\mathbf v) & \textrm{ for } d > 1. \\ \end{cases}
+    y_\mathrm{blend}(\mathbf v) = \begin{cases} y_\mathrm{def} (\mathbf v) & \textrm{ for } d<0; \\ \alpha y_\mathrm{def}(\mathbf v) + (1-\alpha) y_\mathrm{fb}(\mathbf v) & \textrm{ for } 0 \leq d \leq 1; \\ y_\mathrm{fb}(\mathbf v) & \textrm{ for } d > 1. \\ \end{cases}
     $$
-    Here $\alpha(d)$ is the blending parameter defined above.
-* average all $I_\mathrm{blend}(\mathbf v)$ from all hypercubes.
+    Here $\alpha(d)$ is the blending parameter defined above;
+* average $y_\mathrm{blend}(\mathbf v)$ from all hypercubes into the single value.
 
-For compute time efficiency, it proves useful to assemble an array of inferior corners of fully defined hypercubes across the entire grid ahead of time; we will use this array to lookup the nearest fully defined hypercube (or a set of hypercubes) for each vector that is off-grid.
--->
+For compute time efficiency, it proves useful to assemble an array of inferior corners of fully defined hypercubes across the entire grid ahead of time; ndpolator uses this array to lookup the nearest fully defined hypercube (or a set of hypercubes) for each vector that is off-grid.
