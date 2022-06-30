@@ -190,4 +190,8 @@ Once we have the blending region and the blending function defined, we can proce
     Here $\alpha(d)$ is the blending parameter defined above;
 * average $y_\mathrm{blend}(\mathbf v)$ from all hypercubes into the single value.
 
+The figure below depicts the calculation of the distance vector based on the position of the point of interest; if the nearest part of the grid is a vertex, then the distance is a simple eucledian distance to that vertex (depicted in green); if the nearest part is a face, then the distance vector needs to be projected onto that face (depicted in yellow); if there are multiple fully defined nearby faces, then the distance vector to each face determines one extrapolated value and averaging is needed (depicted in red).
+
+![blending_2d.svg](docs/blending_2d.svg)
+
 For compute time efficiency, it proves useful to assemble an array of inferior corners of fully defined hypercubes across the entire grid ahead of time; ndpolator uses this array to lookup the nearest fully defined hypercube (or a set of hypercubes) for each vector that is off-grid.
